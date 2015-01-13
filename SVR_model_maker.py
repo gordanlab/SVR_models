@@ -495,7 +495,9 @@ print >>f_info, '\n=============================================================
 '\n ', orientcutoff, '  <-- PBM orientation difference cutoff', \
 '\n ', coresize, '  <-- Size of central sequence for excluding sequences with good cores in the flanks for building the model', \
 '\n ', svrbins, '  <-- Number bins we split the sequences into for SVR, where for each bin, it is used for testing, with the rest used for training the model', \
-'\n  Linear   <-- LibSVM support vector regression model type\n'
+'\n  Linear   <-- LibSVM support vector regression model type', \
+'\n ', c, '  <-- LibSVM cost', \
+'\n ', p, '  <-- LibSVM epsilon\n'
 
 
 if args.gridsearch:
