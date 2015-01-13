@@ -273,35 +273,6 @@ def libsvm_run_gridsearch(p_list,c_list,pbmfile):
     print >>f_info, '\nBest R squared is ', best[0], ' - with c = ', best[1], ' and p = ', best[2]
     print '\nBest R squared is ', best[0], ' - with c = ', best[1], ' and p = ', best[2]
 
-def E2F_SVR_seq_selector2(pbmfile):
-    '''For E2F PBMs, takes a pbm file, and selects only those sequences we want to use for SVR modeling'''
-    data = read_data(pbmfile)
-    if coretype == 'good': coresearch = searchstrings #used for checking if present in the "core" (=good), leave this blank to include any core, i.e. ['']
-    elif coretype == 'any': coresearch = ['']
-    
-    allseqlist = []
-    for n1 in range(1,len(data)):  ###for every line, skipping the first(headers)
-        seq = data[n1][2] # getting the sequence from the data
-        ###  Only selecting those sequences we want using the following criteria.  A new seq_selector module can be made, using any desired criteria.
-        if ( any(string in seq[16:20] for string in coresearch)  #if the core is in the coresearch list, continuing on next line
-            and ( float(data[n1][6]) > -orientcutoff and float(data[n1][6]) < orientcutoff )  #if the difference in orientation is above a cutoff, continuing on next line
-            and ( 'Bound' in data[n1][0] or 'Neg' in data[n1][0] or 'Flank' in data[n1][0] or 'PosCtrl2' in data[n1][0] )  #if the sequence is in one of these categories, continuing on next line
-            and all(string2 not in seq[:18-(coresize/2)] for string2 in searchstrings) and all(string3 not in seq[(18)+(coresize/2):] for string3 in searchstrings) ): #if the flanks don't contain...
-            allseqlist.append([float(data[n1][5]),seq])
-            #print "Using this sequence"
-    print "initially found", len(allseqlist), "sequences"
-    ###Truncating the sequence if needed
-    for i in range(len(allseqlist)):
-        if len(allseqlist[i][1]) > length:
-            allseqlist[i][1] = allseqlist[i][1][(36-length)/2:((36-length)/2)+length] #truncating the sequence by trimming the edges
-    ### Getting the reverse complement for each sequence, but assigning the same score, and adding to the list of sequences
-    seqlist2 = []
-    for line in allseqlist:
-        seqlist2.append([line[0],reverse_complement(line[1])])
-    allseqlist = allseqlist + seqlist2
-    print "Number of sequences with reverse complements:", len(allseqlist)
-    return allseqlist
-      
 def E2F_SVR_seq_selector(pbmfile):
     seqsize = length
     data = read_data(pbmfile)
