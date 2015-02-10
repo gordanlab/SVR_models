@@ -141,6 +141,10 @@ searchstrings = ['GCGG','CCGC','GCGC']
 # some cutoff. 
 orientcutoff = 0.02
 
+# In case we want to avoid having too many files, we can get a random selection
+# of sequences to use for training the model.
+newsize = 1000
+
 # Defines the size of the center of the sequence; used to find the flanks for 
 # looking for good sequences (see searchstrings, above).
 coresize = 12
@@ -167,9 +171,10 @@ def yes_no_query(question):
 def read_data(filename):
     ''' Creates an array for every cell in a tab separated text file'''
     data = []
-    if os.path.isfile(filename): f = open(filename, 'r') #opens the file as "f"
-    else:
-        sys.exit("The file", filename, "does not exist!")
+    try: f = open(filename, 'r') #opens the file as "f"
+    except IOError: 
+        print "Could not open the file:", filename
+        sys.exit()
     for line in f: #for each line in the file
         l = string.split(line.strip(), '\t') #removes any carriage returns, then splits the tab separated line into columns
         data.append(l) #Add each line to the array
@@ -222,6 +227,73 @@ def libsvm_generate_matrix(seqlist):
         svrmatrix.append(features) #adding the features for each sequence to the master list of features for this set of sequences
     return svrmatrix,featureinfo
     
+def E2F_SVR_seq_selector(pbmfile):
+    seqsize = length
+    data = read_data(pbmfile)
+    if coretype == 'good': coresearch = searchstrings #used for checking if present in the "core" (=good), leave this blank to include any core, i.e. ['']
+    elif coretype == 'any': coresearch = ['']
+    
+    print "\nFinding matching sequences from the PBM file"
+    allseqlist = []
+    for n1 in range(1,len(data)):  ###for every line, skipping the first(headers)
+        seq = data[n1][2] # getting the sequence from the data
+        ###  Only selecting those sequences we want...
+        if ( any(string in seq[16:20] for string in coresearch)  #if the core is in the coresearch list, continuing on next line
+            and ( float(data[n1][6]) > -orientcutoff and float(data[n1][6]) < orientcutoff )  #if the difference in orientation is above a cutoff, continuing on next line
+            and ( 'Bound' in data[n1][0] or 'Neg' in data[n1][0] or 'Flank' in data[n1][0] or 'PosCtrl2' in data[n1][0] )  #if the sequence is in one of these categories, continuing on next line
+            and all(string2 not in seq[:18-(coresize/2)] for string2 in searchstrings) and all(string3 not in seq[(18)+(coresize/2):] for string3 in searchstrings) ): #if the flanks don't contain...
+            allseqlist.append([float(data[n1][5]),seq])
+            #print "Using this sequence"
+    ###Truncating the sequence if needed
+    print "Initially found", len(allseqlist), "sequences"
+    if len(allseqlist[0][1]) != seqsize:
+        for i in range(len(allseqlist)):
+            allseqlist[i][1] = allseqlist[i][1][(36-seqsize)/2:((36-seqsize)/2)+seqsize] #truncating the sequence by trimming the edges
+    ### Getting a random sample if list is too big
+    if len(allseqlist) > newsize:
+        frac = newsize/float(len(allseqlist))
+        print "list is too big, reducing size to", newsize, "sequences"
+        allseqlist = random_subset(allseqlist,frac)[0]
+    ### Getting the reverse complement for each sequence, but assigning the same score, and adding to the list of sequences
+    seqlist2 = []
+    for line in allseqlist:
+        seqlist2.append([line[0],reverse_complement(line[1])])
+    allseqlist = allseqlist + seqlist2
+    print "with reverse complements:", len(allseqlist)    
+    return allseqlist
+
+def Six6_SVR_seq_selector(pbmfile):
+    seqsize = length
+    data = read_data(pbmfile)
+    allseqlist = []
+    for n1 in range(1,len(data)):  ###for every line, skipping the first(headers)
+        seq = data[n1][2] # getting the sequence from the data
+        ###  Only selecting those sequences we want...
+        ###  For now, only selecting according to the orientation cutoff desired
+        if float(data[n1][6]) > -orientcutoff and float(data[n1][6]) < orientcutoff:
+            allseqlist.append([float(data[n1][5]),seq])
+    ###Truncating the sequence if needed
+    print "Initially found", len(allseqlist), "sequences"
+    if len(allseqlist[0][1]) != seqsize:
+        for i in range(len(allseqlist)):
+            allseqlist[i][1] = allseqlist[i][1][(36-seqsize)/2:((36-seqsize)/2)+seqsize] #truncating the sequence by trimming the edges
+    ### Getting a random sample if list is too big
+    if len(allseqlist) > newsize:
+        frac = newsize/float(len(allseqlist))
+        print "list is too big, reducing size to", newsize, "sequences"
+        allseqlist = random_subset(allseqlist,frac)[0]
+    ### Getting the reverse complement for each sequence, but assigning the same score, and adding to the list of sequences
+    seqlist2 = []
+    for line in allseqlist:
+        seqlist2.append([line[0],reverse_complement(line[1])])
+    allseqlist = allseqlist + seqlist2
+    print "with reverse complements:", len(allseqlist)
+    return allseqlist
+
+### Choosing which sequence selector function to use
+SVR_seq_selector = Six6_SVR_seq_selector
+#SVR_seq_selector = E2F_SVR_seq_selector
+
 def libsvm_run_gridsearch(p_list,c_list,pbmfile):
     ''' Using libsvm, runs a grid search varying cost and epsilon, then prints a table of results, followed by the best R squared'''
     test = 0
@@ -229,7 +301,7 @@ def libsvm_run_gridsearch(p_list,c_list,pbmfile):
     
     ### Create your own module for selecting sequences from the PBM file for your protein
     print "\nFinding good sequences from the pbmfile to use for SVR"
-    seqlist = E2F_SVR_seq_selector(pbmfile)
+    seqlist = SVR_seq_selector(pbmfile)
     
     ### Creating the matrix file
     print "Generating matrix file for grid search..."
@@ -273,45 +345,15 @@ def libsvm_run_gridsearch(p_list,c_list,pbmfile):
     print >>f_info, '\nBest R squared is ', best[0], ' - with c = ', best[1], ' and p = ', best[2]
     print '\nBest R squared is ', best[0], ' - with c = ', best[1], ' and p = ', best[2]
 
-def E2F_SVR_seq_selector(pbmfile):
-    seqsize = length
-    data = read_data(pbmfile)
-    if coretype == 'good': coresearch = searchstrings #used for checking if present in the "core" (=good), leave this blank to include any core, i.e. ['']
-    elif coretype == 'any': coresearch = ['']
-    
-    print "\nFinding matching sequences from the PBM file"
-    allseqlist = []
-    for n1 in range(1,len(data)):  ###for every line, skipping the first(headers)
-        seq = data[n1][2] # getting the sequence from the data
-        ###  Only selecting those sequences we want...
-        if ( any(string in seq[16:20] for string in coresearch)  #if the core is in the coresearch list, continuing on next line
-            and ( float(data[n1][6]) > -orientcutoff and float(data[n1][6]) < orientcutoff )  #if the difference in orientation is above a cutoff, continuing on next line
-            and ( 'Bound' in data[n1][0] or 'Neg' in data[n1][0] or 'Flank' in data[n1][0] or 'PosCtrl2' in data[n1][0] )  #if the sequence is in one of these categories, continuing on next line
-            and all(string2 not in seq[:18-(coresize/2)] for string2 in searchstrings) and all(string3 not in seq[(18)+(coresize/2):] for string3 in searchstrings) ): #if the flanks don't contain...
-            allseqlist.append([float(data[n1][5]),seq])
-            #print "Using this sequence"
-    ###Truncating the sequence if needed
-    print "Initially found", len(allseqlist), "sequences"
-    if len(allseqlist[0][1]) != seqsize:
-        for i in range(len(allseqlist)):
-            allseqlist[i][1] = allseqlist[i][1][(36-seqsize)/2:((36-seqsize)/2)+seqsize] #truncating the sequence by trimming the edges
-    ### Getting the reverse complement for each sequence, but assigning the same score, and adding to the list of sequences
-    seqlist2 = []
-    for line in allseqlist:
-        seqlist2.append([line[0],reverse_complement(line[1])])
-    allseqlist = allseqlist + seqlist2
-    print "with reverse complements:", len(allseqlist)    
-    return allseqlist
-
 def libsvm_run(c,p,pbmfile):
     ''' Using libsvm, for running the best set of values (best if obtained from a grid search), using the train and test matrix files'''
     
     ### Create your own module for selecting sequences from the PBM file for your protein
     print "\nFinding good sequences from the pbmfile to use for SVR"
-    allseqlist = E2F_SVR_seq_selector(pbmfile)
-    allseqfile = outprefix + '_allseqlist.txt'
-    f_a = open(allseqfile, 'w')
-    for line in allseqlist: print >>f_a, line
+    allseqlist = SVR_seq_selector(pbmfile)
+#    allseqfile = outprefix + '_allseqlist.txt'
+#    f_a = open(allseqfile, 'w')
+#    for line in allseqlist: print >>f_a, line
 
     print "Using", len(allseqlist), "sequences (includes reverse complements)"
     traincount = int(float(len(allseqlist)) * ((float(svrbins)-1)/float(svrbins)))
@@ -409,6 +451,7 @@ def libsvm_run(c,p,pbmfile):
             os.remove(modelfile)
             os.remove(outfile)
         else:
+            libsvm_feature_weights(modelfile)
             os.rename(trainmatrixfile, trainmatrixfile[:-6]+'.txt')  
             os.rename(testmatrixfile, testmatrixfile[:-6]+'.txt')
             os.rename(modelfile, trainmatrixfile[:-6]+'.txt.model')
@@ -421,7 +464,7 @@ def libsvm_run(c,p,pbmfile):
     f = open(resultsfile, 'w', 1)
     for line in bestresults: print >>f, ("\t".join(map(str,line)))
     f.close
-     
+    
     ### Writing info to the info file
     print >>f_info, "\nOutput files for best run are:"
     print >>f_info, ' ', outprefix+'_train_matrix.txt', "<-- The LibSVM matrix file for the sequences used to trian the model"
@@ -435,6 +478,56 @@ def libsvm_run(c,p,pbmfile):
     print >>f_info, ' ', outprefix+'_test_matrix_SVR-prediction.txt', '  <-- The actual predicted intensity scores for the test set generated by LibSVM'
     print >>f_info, ' ', resultsfile, '  <-- Contains both the actual intensities, and predicted intensities for the test set'
                 
+
+def libsvm_feature_weights(modelfile):
+    ''' Getting feature weights, using the output from libsvm, with features of size k, works with sequences of variable sizes'''
+    #print 'Getting feature weights from', modelfile
+    model = read_data(modelfile)[6:] #Starting with row 7, to avoid header lines
+    k = kmers[-1]    
+    ### Creating a dictionary with the base/doublet for each feature
+    bases = []
+    for n in itertools.product('ACGT', repeat=k):
+        bases.append(''.join(n))
+    
+    features = []
+    featnum = 2 #starting the feature number at 2, because the first feature is just '1:1'
+#     print model[0][0]
+    seqsize = (len(model[0][0].split())-2)/(len(bases))+(k-1) #convoluted way of getting the size of the sequence used
+    for x in range(1,seqsize+1-(k-1)): # for each position in the sequence, starting with 1 (instead of 0)
+        for base in bases:
+            #print featnum, "\t", x, "\t", base
+            features.append([featnum,x,base])
+            featnum += 1
+#         print features
+    weights = {key: 0 for key in range(1,len(features)+2)} #dictionary to hold the value of the weights for each feature
+    counts = {key: 0 for key in range(1,len(features)+2)}
+#    print counts
+#    print len(weights), weights
+    for n1 in range(len(model)): #for every line in the svm model file
+        line = string.split((model[n1][0]).strip()) # putting each element of the line into a list, called "line"
+#        print line
+        for n2 in range(1,len(line)): #for every feature (the first item is the sequence weight, not a feature)
+            feature = string.split((line[n2]).strip(), ':') #separating each element into the feature number, and the value
+            weight = float(line[0])*float(feature[1]) #finding the weight of each feature (= sequence weight x feature value)
+            weights[int(feature[0])] = weights[int(feature[0])] + weight #updating the dictionary to account for the total weights for each feature
+            counts[int(feature[0])] = counts[int(feature[0])] + int(feature[1])
+#             print 'Feature number is', feature[0], 'and value is', feature[1], 'weight is', line[0], 'val is', weight, 'count is',counts[int(feature[0])] 
+#    print weights
+#    for x in range(1,346): print (x+1), "\t", weights[x]
+    output = [['Feature_Number','Feature_Weight','Position','Feature','Count']]
+    print "Writing the output"
+    for n3 in range(len(weights)-1):
+#         print features[n3][0],weights[n3+2],features[n3][1],features[n3][2]
+        output.append([features[n3][0],weights[n3+2],features[n3][1],features[n3][2],counts[n3+2]])
+    #for line in output: print "\t".join(map(str,line))
+    f = open(modelfile[:-10]+'-weights.txt', "w")
+    for line in output: print >>f, "\t".join(map(str,line))
+    f.close
+    return output
+
+
+
+
 ''' Running the program ========================================================'''
 
 ### Testing to see if we need to normalize the data in the PBM file
@@ -467,17 +560,19 @@ print >>f_info, '\n=============================================================
 '\n ', coresize, '  <-- Size of central sequence for excluding sequences with good cores in the flanks for building the model', \
 '\n ', svrbins, '  <-- Number bins we split the sequences into for SVR, where for each bin, it is used for testing, with the rest used for training the model', \
 '\n  Linear   <-- LibSVM support vector regression model type', \
-'\n ', c, '  <-- LibSVM cost', \
-'\n ', p, '  <-- LibSVM epsilon\n'
 
 
 if args.gridsearch:
     print "Running a grid search. Use the results and re-run this program to refine another grid search, or run full LibSVM"
     print "\nCost values to be tested:", c_list, "\nEpsilon values to be tested:", p_list
+    print >>f_info, '\n ', c_list, '  <-- LibSVM costs tested', '\n ', p_list, '  <-- LibSVM epsilons tested\n'
     libsvm_run_gridsearch(p_list,c_list,pbmfile)
+    
 else:
     print "Running full libsvm"
+    print >>f_info, '\n ', c, '  <-- LibSVM cost', '\n ', p, '  <-- LibSVM epsilon\n'
     libsvm_run(c,p,pbmfile)
+    
 
 f_info.close()
     
