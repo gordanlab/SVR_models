@@ -393,8 +393,8 @@ def scores_by_SVR(seqdata,modelfile,outfile):
             print "Looks like this file already has sequences. Delete this file and re-run to start over:", outfile
             return 
     
-    ### Breaking the allseqs file into smaller chunks if it's too big (500,000 sequences per chunk)
-    print "total number of sequences", len(seqdata)
+    ### Breaking the allseqs file into smaller chunks if it's too big 
+    print "Total number of sequences in the input file:", len(seqdata)
     
     ### Splitting list into smaller lists, and saving as a list of lists
     chiplists = [seqdata[i:i + chunksize] for i in range(0, len(seqdata), chunksize)]
@@ -402,13 +402,13 @@ def scores_by_SVR(seqdata,modelfile,outfile):
     chunks = len(chiplists)
     if chunks > 1: print "Splitting this into", chunks, "files, each with", chunksize, "main sequences"
     #else: print "This is small enough, using whole file"
-    
+    print "Organizing the sequences for libsvm ..."
     f=open(outfile,'w', 1)
-    for n in range(len(chiplists)): #for each 
+    for n in range(len(chiplists)): #for each peak
         #print "testing set", n+1, "of", len(chiplists)
         smallchip = chiplists[n]
     
-        ### Making master list of sequences to get scored
+        ### Making master list of sequences to get scored (i.e. 36mers)
         allseqs = [] #resulting colums = chromosome, peakstart, peakend, kmer-number, kmer-seq
         for line in smallchip:
             peak = line[-1] #getting the peak sequence
@@ -418,7 +418,7 @@ def scores_by_SVR(seqdata,modelfile,outfile):
 
         ### Finding the kmers (and reverse complements) with good cores, writing to a new list
         seqlist = []
-        goodcorekmers = []
+        #goodcorekmers = []
         searchstrings = ['GCGG','CCGC','GCGC']
 #         searchstrings = ['']
         for line in allseqs:
@@ -429,46 +429,36 @@ def scores_by_SVR(seqdata,modelfile,outfile):
             if any(coreseq in coreF for coreseq in searchstrings): seqlist.append(kmer) #if the core is a good core, add to the list
             if any(coreseq in coreR for coreseq in searchstrings): seqlist.append(kmerR) #if the core is a good core, add to the list
          
-        print "  Getting the SVR scores for", len(seqlist), "small sequences:  set", n+1, "of", len(chiplists)
-        scores = apply_model_to_seqs(seqlist,modelfile) #columns are Score, Sequence, with header line
-        #for line in scores: print "\t".join(map(str,line))
-         
+        seqlist = list(set(seqlist)) #removing duplicates from the list (not order preserving)
+        if len(chiplists) > 1: print "  Getting the SVR scores for", len(seqlist), "small sequences:  set", n+1, "of", len(chiplists)
+        else: print "  Getting the SVR scores for", len(seqlist), "small sequences"
+        scores = apply_model_to_seqs(seqlist,modelfile) #dictionary with the sequence as the key, and the score as the value
+        
         ### Assigning SVR scores (or badscore) to allseqs list
         #print "Assigning scores to the right sequences"
-        starttime2 = time.time()
+        print "Processing SVR scores"
         for i in range(len(allseqs)): # for each 36mer in each peak
-            chrom, start, stop, kmerpos, seq1 = allseqs[i]
+            chrom, start, stop, kmerpos, seqF = allseqs[i]
+            seqR = reverse_complement(seqF)
             #print allseqs[i][4], len(scores)
             ### Getting the score. Note, kmers that were scored have reverse compliments, getting best of those two scores, or badscore
-            newscore = badscore #we'll change this if there is a score assigned to this sequence
-            if len(scores) > 1:
-                for j in range(1,(len(scores)),2): #for each sequence we have a SVR score for, counting by 2 
-                    #print "lines", j, "and", j+1, "out of", len(scores)-1, scores[j], scores[j+1]
-                    score_f, seq_f = scores[j]
-                    score_r, seq_r = scores[j+1]
-                    if seq1 == seq_f or seq1 == seq_r: 
-                        #print "This sequence has a score!", score_f, score_r, seq_f
-                        
-                        #changethis (remove line below) when done testing
-                        if seqtype == 'fwd': newscore = float(score_f)
-                        elif seqtype == 'rev': newscore = float(score_r)
-                        elif seqtype == 'best': newscore = max([float(score_f),float(score_r)])
-                        else: sys.exit("seqtype parameter in the program is not valid; must be 'fwd', 'rev', or 'best' ")
-                        
-                        del scores[j:j+2]
-                        break #once we find a score for this sequence, exit out of the "if seq1 ==  seq_f" loop
-                    else: 
-                        continue
-                    break #once we've found a score
-            if newscore < 0: newscore = 0
-            if newscore > 1: newscore = 1
+            if seqF in scores: 
+                scoreF = scores[seqF]
+                del scores[seqF] #removing this from the dictionary to make things faster as we go on
+            else: scoreF = badscore #assigning the default badscore if we didn't get a score for this sequence
+            if seqR in scores: 
+                scoreR = scores[seqR]
+                del scores[seqR] #removing this from the dictionary to make things faster as we go on
+            else: scoreR = badscore
+            if seqtype == 'fwd': newscore = float(scoreF)
+            elif seqtype == 'rev': newscore = float(scoreR)
+            elif seqtype == 'best': newscore = max([float(scoreF),float(scoreR)])
+            else: sys.exit("seqtype parameter in the program is not valid; must be 'fwd', 'rev', or 'best' ")
             allseqs[i].append(newscore)
             #print "score is", newscore, "for", allseqs[i]
-            
-        #for line in allseqs: print line
      
         ### Formatting results and writing to output file
-#         print "Formatting results for part", n+1,"out of", len(chiplists), "and updating output file:", outfile
+        print "Formatting results for part", n+1,"out of", len(chiplists), "and updating output file:", outfile
         lineout = []
         for n2 in range(len(allseqs)):
 #             print n2+1, "out of", (len(allseqs))
@@ -485,68 +475,101 @@ def scores_by_SVR(seqdata,modelfile,outfile):
                 print >>f, "\t".join(map(str,lineout))
                 lineout = []
         
-        endtime2 = time.time()
-        runtime2 = int(endtime2 - starttime2)
     f.close()
 
-def apply_model_to_seqs(seqlist,model):
+def apply_model_to_seqs(bigseqlist,model):
     '''Getting predicted scores for set of sequences'''
-    starttime = time.time()
+    #starttime = time.time()
     
+    ### Breaking this up into smaller sets of sequences if too large, to prevent libsvm from crashing
+    sizelimit = 10000
+    allseqlists = [bigseqlist[i:i + sizelimit] for i in range(0, len(bigseqlist), sizelimit)] #breaking into groups of specificed size
+    setnum = len(allseqlists)
+    if len(bigseqlist) > sizelimit: print "Too many small sequences in this list, breaking it up into", setnum, "parts for libsvm"
+    results = {}
     ### Generating the matrix file
-    svrmatrix = []
-    #print 'Getting matrix for data set, with', len(seqlist), 'sequences'
-    for seq in seqlist:
-        #score,seq = 0,line #assigning a default score of 0 to every sequence
-        ###Creating the list of features with relevent info
-        featureinfo = [['feature','position','featnum','featvalue'],['start','na',1,1]] #header, and first feature which never changes
-        featnum = 2 #the first feature is already definde as 1:1, so we start with 2
-        #print seq, score
-        for k in kmers:
-            ###Getting list of all possible combinates of bases, of length k, and all 4mers (for core)
-            bases = [] #creating empty lists needed later
-            for n in itertools.product('ACGT', repeat=k): bases.append(''.join(n)) #all possible kmers with lenth k
-            for n1 in range(len(seq)-(k-1)): #For each position in the sequence
-                kmer =seq[n1:n1+k] #getting the actual kmer at this position
-                for n2 in range(len(bases)): #for every possible kmer of the size we want
-                    feature = bases[n2] #getting the feature
-                    if feature == kmer: featvalue = 1 #testing if the actual k-mer matches the feature, in which case the feature value is 1
-                    else: featvalue = 0
-                    featureinfo.append([feature, n1, featnum, featvalue]) #adding the info about the feature to the list
-                    featnum += 1 #increasing the feature number by 1
-        #for line in featureinfo: print line 
-        features = [0] #starting a new list for building the matrix for SVR
-        for x in range(1,len(featureinfo)): #for every feature, in this list (skipping first item because header)
-            features.append(str(featureinfo[x][2])+':'+str(featureinfo[x][3])) # putting the feature values into the list
-        svrmatrix.append(features) #adding the features for each sequence to the master list of features for this set of sequences
+    #print 'Getting matrix for data set, with', len(bigseqlist), 'sequences'
 
-    
-    ### Writing the matrix to a temporary file
-    matrixfile = 'SVRmatrix_temp.txt'
-    #print 'Writing matrix to', matrixfile
-    f1 = open(matrixfile, 'w')
-    for line in svrmatrix: print >>f1, ("\t".join(map(str,line)))
-    f1.close()
-    
-    ### Getting the predicted scores using the SVR model
-    outfile = matrixfile[:-4]+'-prediction.txt'
-#     print "svm-predict", testfile, modelfile, outfile
-    args = ["svm-predict", matrixfile, model, outfile]
-    output, error = Popen(args, stdout = PIPE, stderr = PIPE).communicate() #running the command, and storing the results
-    if len(error) > 0: #if running the command caused an error, print the error
-        print "SVM-predict error:", error
-    
-    ### Getting and organizing the results
-    results = [['Score','Sequence']]
-    outdata = read_data(outfile)
-    for x in range(len(seqlist)):
-        #print seqlist[x], outdata[x]
-        results.append([float(outdata[x][0]), seqlist[x]])
-        #print outdata[x][0], seqs[x], seqs[x][16:20]
-    endtime = time.time()
-    runtime = int(endtime - starttime)
+    ### Creating temporary files for each set of sequences to run
+    for i in range(setnum): # for each set of 36mers (if there weren't too many sequences, this should be "0" for a single set)
+        tempf = open("SVRseqs_temp"+str(i)+".txt", 'w')
+        for line in allseqlists[i]: 
+            print >>tempf, line
+        tempf.close()
+        
+    ### Opening each temporary file separately to run libsvm on
+    for i in range(setnum):
+        
+        ### Getting the sequences from the temp file
+        tempfile = "SVRseqs_temp"+str(i)+".txt"
+        #print "opening file", tempf
+        seqlist = []
+        try: tempf = open(tempfile, 'r') #opens the file as "f"
+        except IOError: 
+            print "Could not open the file:", tempfile
+            sys.exit()
+        for line2 in tempf: #for each line in the file
+            #l = string.split(line.strip(), '\t') #removes any carriage returns, then splits the tab separated line into columns
+            seqlist.append(line2.strip()) #Add each line to the array
+        tempf.close() #closing the file
+        
+        ### Generating matrix file for each sequence in this set
+        svrmatrix = []
+        if len(allseqlists) > 1: print "Testing set", i+1, "of", setnum, " - ", len(seqlist), "sequences" 
+        for seq in seqlist:
+            
+            ###Creating the list of features with relevent info
+            featureinfo = [['feature','position','featnum','featvalue'],['start','na',1,1]] #header, and first feature which never changes
+            featnum = 2 #the first feature is already definde as 1:1, so we start with 2
+            for k in kmers: #defined in "parameters" section
+                ###Getting list of all possible combinations of bases, of length k, and all 4mers (for core)
+                bases = [] #creating empty lists needed later
+                for n in itertools.product('ACGT', repeat=k): bases.append(''.join(n)) #all possible kmers with lenth k
+                for n1 in range(len(seq)-(k-1)): #For each position in the sequence
+                    kmer =seq[n1:n1+k] #getting the actual kmer at this position
+                    for n2 in range(len(bases)): #for every possible kmer of the size we want
+                        feature = bases[n2] #getting the feature
+                        if feature == kmer: featvalue = 1 #testing if the actual k-mer matches the feature, in which case the feature value is 1
+                        else: featvalue = 0
+                        featureinfo.append([feature, n1, featnum, featvalue]) #adding the info about the feature to the list
+                        featnum += 1 #increasing the feature number by 1
+            features = [0] #starting a new list for building the matrix for SVR
+            for x in range(1,len(featureinfo)): #for every feature, in this list (skipping first item because header)
+                features.append(str(featureinfo[x][2])+':'+str(featureinfo[x][3])) # putting the feature values into the list
+            svrmatrix.append(features) #adding the features for each sequence to the master list of features for this set of sequences
+        
+        ### Writing the matrix to a temporary file
+        matrixfile = 'SVRmatrix_temp.txt'
+        #print 'Writing matrix to', matrixfile
+        f1 = open(matrixfile, 'w')
+        for line in svrmatrix: print >>f1, ("\t".join(map(str,line)))
+        f1.close()
+        
+        ### Getting the predicted scores using the SVR model
+        outfile = matrixfile[:-4]+'-prediction.txt'
+        print "svm-predict", matrixfile, modelfile, outfile
+        args = ["svm-predict", matrixfile, model, outfile]
+        #Popen(args, close_fds=True)
+        output, error = Popen(args, stdout = PIPE, stderr = PIPE).communicate() #running the command, and storing the results
+        if len(error) > 0: #if running the command caused an error, print the error
+            print "SVM-predict error:", error
+        
+        ### Getting and organizing the results
+        outdata = read_data(outfile)
+        #print "length of seqlist:", len(seqlist)
+        for x in range(len(seqlist)):
+            #print seqlist[x], outdata[x]
+            #results.append([float(outdata[x][0]), seqlist[x]])
+            results[seqlist[x]] = float(outdata[x][0])
+            #print outdata[x][0], seqs[x], seqs[x][16:20]
+        #os.remove(tempfile)
+        #os.remove(matrixfile)
+        #os.remove(outfile)
+
+    #endtime = time.time()
+    #runtime = int(endtime - starttime)
     #print "SVR runtime (hh:mm:ss) = ", time.strftime('%H:%M:%S', time.gmtime(runtime))
-    return results
+    return results #output is dictionary with the sequence as the key, and the score as the value
     
 def SVR_ROC(modelfile,posscorefile,negscorefile):
     '''The goal here is to take a libsvm regression model for binding, a positive set of sequences (i.e. ChIP peaks), 
