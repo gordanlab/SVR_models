@@ -140,6 +140,7 @@ def read_pwm(pwmfile):
     for x in range(4): #for every line with probabilities for the bases
         for y in range(1,len(pwmdata[1])):
             pwmdata[x][y] = float(pwmdata[x][y])
+            if len( pwmdata[x][0]) > 1: pwmdata[x][0] = pwmdata[x][0][0] #Removing anything after the base (for things like "A:")
     
     ### Finding the sum of the columns, so if it's not 1, we can convert the numbers to probabilities.
     coltotals = []
